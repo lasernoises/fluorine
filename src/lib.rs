@@ -80,6 +80,8 @@ impl<I: Copy + PartialEq, O> RxFn<I, O> {
         // The unwrap works because the whole thing starts out dirty and after that there's always
         // something in the option.
         if self.dirty.get() || self.last_input.unwrap() != params {
+            self.last_input = Some(params);
+
             // A generation counter might be a good alternative here that doesn't need to do an
             // allocation whenever it changes.
             let old = std::mem::replace(&mut self.dirty, Rc::new(Cell::new(false)));
@@ -134,6 +136,26 @@ mod tests {
         *state.something.get_mut() = 64.;
 
         assert_eq!(layout(&mut state, 2.), 32.);
+    }
+
+    #[test]
+    fn test_last_input_storage() {
+        let times_called = Cell::new(0);
+
+        let mut f = RxFn::new();
+        let mut something = |num: u32| -> bool {
+            *f.call(num, |_ctx, num| {
+                times_called.set(times_called.get() + 1);
+                num & 1 == 0
+            })
+        };
+
+        assert!(!something(1));
+        assert_eq!(times_called.get(), 1);
+        assert!(!something(1));
+        assert_eq!(times_called.get(), 1);
+        assert!(something(310));
+        assert_eq!(times_called.get(), 2);
     }
 
     #[test]
