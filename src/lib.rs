@@ -5,7 +5,7 @@ use std::{
 
 pub struct Rx<T> {
     value: T,
-    dependents: RefCell<Vec<Weak<Cell<bool>>>>,
+    dependents: RefCell<Vec<(u64, Weak<Dependent>)>>,
 }
 
 impl<T: Copy> Rx<T> {
@@ -19,41 +19,50 @@ impl<T: Copy> Rx<T> {
     pub fn read(&self, ctx: &RxCtx) -> T {
         let mut dependents = self.dependents.borrow_mut();
 
-        let mut weak = Some(Rc::downgrade(ctx.dirty));
+        let mut push = true;
 
-        dependents.retain_mut(|d| {
+        dependents.retain_mut(|(gen, d)| {
             let Some(dependent) = d.upgrade() else {
-                // Filter out old references to closures that have since been re-run and don't
-                // depend on this value any more.
+                // filter out dependents that no longer exist
                 return false;
             };
 
-            if Rc::ptr_eq(&dependent, ctx.old) {
-                *d = weak
-                    .take()
-                    .expect("there should be no duplicate dependents");
+            if Rc::ptr_eq(&dependent, ctx.dependent) {
+                *gen = ctx.dependent.generation.get();
+                push = false;
             }
 
             true
         });
 
-        if let Some(weak) = weak {
-            dependents.push(weak);
+        if push {
+            dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
         }
 
         self.value
     }
 
     pub fn get_mut(&mut self) -> &mut T {
-        self.dependents.borrow_mut().retain(|d| {
-            let Some(dependent) = d.upgrade() else {
-                return false;
-            };
+        fn mark_dirty(dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
+            dependents.borrow_mut().retain(|(gen, d)| {
+                let Some(dependent) = d.upgrade() else {
+                    return false;
+                };
 
-            dependent.set(true);
+                // filter out things that are no longer dependent
+                if dependent.generation.get() > *gen {
+                    return false;
+                }
 
-            true
-        });
+                dependent.dirty.set(true);
+
+                mark_dirty(&dependent.dependents);
+
+                true
+            });
+        }
+
+        mark_dirty(&self.dependents);
 
         &mut self.value
     }
@@ -62,7 +71,7 @@ impl<T: Copy> Rx<T> {
 pub struct RxFn<I: Copy + PartialEq, O> {
     last_input: Option<I>,
     result: Option<O>,
-    dirty: Rc<Cell<bool>>,
+    this: Rc<Dependent>,
 }
 
 impl<I: Copy + PartialEq, O> RxFn<I, O> {
@@ -70,26 +79,49 @@ impl<I: Copy + PartialEq, O> RxFn<I, O> {
         RxFn {
             last_input: None,
             result: None,
-            dirty: Rc::new(Cell::new(true)),
+            this: Rc::new(Dependent {
+                generation: Cell::new(0),
+                dirty: Cell::new(true),
+                dependents: RefCell::new(Vec::new()),
+            }),
         }
     }
 
-    pub fn call(&mut self, params: I, mut closure: impl FnMut(&RxCtx, I) -> O) -> &O {
+    pub fn call(&mut self, ctx: &RxCtx, params: I, mut closure: impl FnMut(&RxCtx, I) -> O) -> &O {
+        let mut dependents = self.this.dependents.borrow_mut();
+
+        let mut push = true;
+
+        dependents.retain_mut(|(gen, d)| {
+            let Some(dependent) = d.upgrade() else {
+                // filter out dependents that no longer exist
+                return false;
+            };
+
+            if Rc::ptr_eq(&dependent, ctx.dependent) {
+                *gen = ctx.dependent.generation.get();
+                push = false;
+            }
+
+            true
+        });
+
+        if push {
+            dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
+        }
+
         // Maybe != is not quite right here because we don't want trigger a re-run every time a NaN
         // gets passed.
         // The unwrap works because the whole thing starts out dirty and after that there's always
         // something in the option.
-        if self.dirty.get() || self.last_input.unwrap() != params {
+        if self.this.dirty.get() || self.last_input.unwrap() != params {
             self.last_input = Some(params);
-
-            // A generation counter might be a good alternative here that doesn't need to do an
-            // allocation whenever it changes.
-            let old = std::mem::replace(&mut self.dirty, Rc::new(Cell::new(false)));
+            self.this.dirty.set(false);
+            self.this.generation.set(self.this.generation.get() + 1);
 
             let result = self.result.insert(closure(
                 &RxCtx {
-                    old: &old,
-                    dirty: &self.dirty,
+                    dependent: &self.this,
                 },
                 params,
             ));
@@ -102,8 +134,27 @@ impl<I: Copy + PartialEq, O> RxFn<I, O> {
 }
 
 pub struct RxCtx<'a> {
-    old: &'a Rc<Cell<bool>>,
-    dirty: &'a Rc<Cell<bool>>,
+    dependent: &'a Rc<Dependent>,
+}
+
+pub struct Dependent {
+    generation: Cell<u64>,
+    dirty: Cell<bool>,
+    dependents: RefCell<Vec<(u64, Weak<Dependent>)>>,
+}
+
+impl Dependent {
+    pub fn toplevel() -> Rc<Self> {
+        Rc::new(Dependent {
+            generation: Cell::new(0),
+            dirty: Cell::new(true),
+            dependents: RefCell::new(Vec::new()),
+        })
+    }
+
+    pub fn ctx<'a>(self: &'a Rc<Self>) -> RxCtx<'a> {
+        RxCtx { dependent: self }
+    }
 }
 
 #[cfg(test)]
@@ -117,8 +168,8 @@ mod tests {
             layout: RxFn<f64, f64>,
         }
 
-        fn layout(state: &mut MyState, width: f64) -> f64 {
-            *state.layout.call(width, |ctx, width| {
+        fn layout(ctx: &RxCtx, state: &mut MyState, width: f64) -> f64 {
+            *state.layout.call(ctx, width, |ctx, width| {
                 let height = state.something.read(ctx) / width;
 
                 height
@@ -130,12 +181,15 @@ mod tests {
             layout: RxFn::new(),
         };
 
-        assert_eq!(layout(&mut state, 2.), 64.);
+        let dependent = Dependent::toplevel();
+        let ctx = &dependent.ctx();
+
+        assert_eq!(layout(ctx, &mut state, 2.), 64.);
 
         // let ctx = RxCtx {}; // TODO: figure out where that comes from or if it's needed at all
         *state.something.get_mut() = 64.;
 
-        assert_eq!(layout(&mut state, 2.), 32.);
+        assert_eq!(layout(ctx, &mut state, 2.), 32.);
     }
 
     #[test]
@@ -143,18 +197,21 @@ mod tests {
         let times_called = Cell::new(0);
 
         let mut f = RxFn::new();
-        let mut something = |num: u32| -> bool {
-            *f.call(num, |_ctx, num| {
+        let mut something = |ctx, num: u32| -> bool {
+            *f.call(ctx, num, |_ctx, num| {
                 times_called.set(times_called.get() + 1);
                 num & 1 == 0
             })
         };
 
-        assert!(!something(1));
+        let dependent = Dependent::toplevel();
+        let ctx = &dependent.ctx();
+
+        assert!(!something(ctx, 1));
         assert_eq!(times_called.get(), 1);
-        assert!(!something(1));
+        assert!(!something(ctx, 1));
         assert_eq!(times_called.get(), 1);
-        assert!(something(310));
+        assert!(something(ctx, 310));
         assert_eq!(times_called.get(), 2);
     }
 
@@ -164,23 +221,26 @@ mod tests {
         let mut b = Rx::new(2);
 
         let mut f = RxFn::new();
-        let mut something = |a: &mut Rx<bool>, b: &mut Rx<u32>| -> bool {
-            *f.call((), |ctx, ()| a.read(ctx) || b.read(ctx) > 3)
+        let mut something = |ctx, a: &mut Rx<bool>, b: &mut Rx<u32>| -> bool {
+            *f.call(ctx, (), |ctx, ()| a.read(ctx) || b.read(ctx) > 3)
         };
 
-        assert!(something(&mut a, &mut b));
+        let dependent = Dependent::toplevel();
+        let ctx = &dependent.ctx();
+
+        assert!(something(ctx, &mut a, &mut b));
         assert_eq!(a.dependents.borrow().len(), 1);
         assert_eq!(b.dependents.borrow().len(), 0);
 
         *a.get_mut() = false;
 
-        assert!(!something(&mut a, &mut b));
+        assert!(!something(ctx, &mut a, &mut b));
         assert_eq!(a.dependents.borrow().len(), 1);
         assert_eq!(b.dependents.borrow().len(), 1);
 
         *a.get_mut() = true;
 
-        assert!(something(&mut a, &mut b));
+        assert!(something(ctx, &mut a, &mut b));
         assert_eq!(a.dependents.borrow().len(), 1);
         assert_eq!(b.dependents.borrow().len(), 1);
 
@@ -197,8 +257,8 @@ mod tests {
             layout: RxFn<f64, f64>,
         }
 
-        fn inner_layout(state: &mut Inner, width: f64) -> f64 {
-            *state.layout.call(width, |ctx, width| {
+        fn inner_layout(ctx: &RxCtx, state: &mut Inner, width: f64) -> f64 {
+            *state.layout.call(ctx, width, |ctx, width| {
                 if state.a.read(ctx) && width > 0. {
                     20.
                 } else {
@@ -214,10 +274,10 @@ mod tests {
             layout: RxFn<f64, f64>,
         }
 
-        fn layout(state: &mut MyState, width: f64) -> f64 {
-            *state.layout.call(width, |ctx, width| {
-                let height =
-                    state.something.read(ctx) / width + inner_layout(&mut state.inner, width - 1.);
+        fn layout(ctx: &RxCtx, state: &mut MyState, width: f64) -> f64 {
+            *state.layout.call(ctx, width, |ctx, width| {
+                let height = state.something.read(ctx) / width
+                    + inner_layout(ctx, &mut state.inner, width - 1.);
 
                 height
             })
@@ -232,6 +292,13 @@ mod tests {
             layout: RxFn::new(),
         };
 
-        assert_eq!(layout(&mut state, 2.), 84.);
+        let dependent = Dependent::toplevel();
+        let ctx = &dependent.ctx();
+
+        assert_eq!(layout(ctx, &mut state, 2.), 84.);
+
+        *state.inner.a.get_mut() = false;
+
+        assert_eq!(layout(ctx, &mut state, 2.), 94.);
     }
 }
