@@ -17,24 +17,43 @@ impl<T: Copy> Rx<T> {
     }
 
     pub fn read(&self, ctx: &RxCtx) -> T {
-        // TODO: unwraping is probably wrong
-        if !self
-            .dependents
-            .borrow()
-            .iter()
-            .any(|d| Rc::ptr_eq(&d.upgrade().unwrap(), ctx.dirty))
-        {
-            self.dependents.borrow_mut().push(Rc::downgrade(ctx.dirty));
+        let mut dependents = self.dependents.borrow_mut();
+
+        let mut weak = Some(Rc::downgrade(ctx.dirty));
+
+        dependents.retain_mut(|d| {
+            let Some(dependent) = d.upgrade() else {
+                // Filter out old references to closures that have since been re-run and don't
+                // depend on this value any more.
+                return false;
+            };
+
+            if Rc::ptr_eq(&dependent, ctx.old) {
+                *d = weak
+                    .take()
+                    .expect("there should be no duplicate dependents");
+            }
+
+            true
+        });
+
+        if let Some(weak) = weak {
+            dependents.push(weak);
         }
 
         self.value
     }
 
     pub fn get_mut(&mut self) -> &mut T {
-        for dependent in &*self.dependents.borrow() {
-            // TODO: unwrap is probably not appropriate here
-            dependent.upgrade().unwrap().set(true);
-        }
+        self.dependents.borrow_mut().retain(|d| {
+            let Some(dependent) = d.upgrade() else {
+                return false;
+            };
+
+            dependent.set(true);
+
+            true
+        });
 
         &mut self.value
     }
@@ -61,15 +80,17 @@ impl<I: Copy + PartialEq, O> RxFn<I, O> {
         // The unwrap works because the whole thing starts out dirty and after that there's always
         // something in the option.
         if self.dirty.get() || self.last_input.unwrap() != params {
-            // self.dirty.set(false);
-
             // A generation counter might be a good alternative here that doesn't need to do an
             // allocation whenever it changes.
-            self.dirty = Rc::new(Cell::new(false));
+            let old = std::mem::replace(&mut self.dirty, Rc::new(Cell::new(false)));
 
-            let result = self
-                .result
-                .insert(closure(&RxCtx { dirty: &self.dirty }, params));
+            let result = self.result.insert(closure(
+                &RxCtx {
+                    old: &old,
+                    dirty: &self.dirty,
+                },
+                params,
+            ));
 
             result
         } else {
@@ -79,6 +100,7 @@ impl<I: Copy + PartialEq, O> RxFn<I, O> {
 }
 
 pub struct RxCtx<'a> {
+    old: &'a Rc<Cell<bool>>,
     dirty: &'a Rc<Cell<bool>>,
 }
 
@@ -138,6 +160,11 @@ mod tests {
 
         assert!(something(&mut a, &mut b));
         assert_eq!(a.dependents.borrow().len(), 1);
+        assert_eq!(b.dependents.borrow().len(), 1);
+
+        *b.get_mut() = 513;
+
+        // After b has been mutated it should become aware that f is no longer dependent on it.
         assert_eq!(b.dependents.borrow().len(), 0);
     }
 
