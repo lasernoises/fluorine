@@ -3,12 +3,22 @@ use std::{
     rc::{Rc, Weak},
 };
 
+#[derive(Debug)]
 pub struct Rx<T> {
     value: T,
     dependents: RefCell<Vec<(u64, Weak<Dependent>)>>,
 }
 
-impl<T: Copy> Rx<T> {
+impl<T: Clone> Clone for Rx<T> {
+    fn clone(&self) -> Self {
+        Rx {
+            value: self.value.clone(),
+            dependents: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl<T: Clone> Rx<T> {
     pub fn new(value: T) -> Self {
         Rx {
             value,
@@ -16,7 +26,7 @@ impl<T: Copy> Rx<T> {
         }
     }
 
-    pub fn read(&self, ctx: &RxCtx) -> T {
+    pub fn read(&self, ctx: &RxCtx) -> &T {
         let mut dependents = self.dependents.borrow_mut();
 
         let mut push = true;
@@ -39,7 +49,7 @@ impl<T: Copy> Rx<T> {
             dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
         }
 
-        self.value
+        &self.value
     }
 
     pub fn get_mut(&mut self) -> &mut T {
@@ -68,13 +78,21 @@ impl<T: Copy> Rx<T> {
     }
 }
 
-pub struct RxFn<I: Copy + PartialEq, O> {
+#[derive(Debug)]
+pub struct RxFn<I: PartialEq, O> {
     last_input: Option<I>,
     result: Option<O>,
     this: Rc<Dependent>,
 }
 
-impl<I: Copy + PartialEq, O> RxFn<I, O> {
+// TODO: Add a test and comment that explains the reasoning for this.
+impl<I: PartialEq, O> Clone for RxFn<I, O> {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl<I: PartialEq, O> RxFn<I, O> {
     pub fn new() -> Self {
         RxFn {
             last_input: None,
@@ -87,7 +105,7 @@ impl<I: Copy + PartialEq, O> RxFn<I, O> {
         }
     }
 
-    pub fn call(&mut self, ctx: &RxCtx, params: I, mut closure: impl FnMut(&RxCtx, I) -> O) -> &O {
+    pub fn call(&mut self, ctx: &RxCtx, params: I, mut closure: impl FnMut(&RxCtx, &I) -> O) -> &O {
         let mut dependents = self.this.dependents.borrow_mut();
 
         let mut push = true;
@@ -114,8 +132,8 @@ impl<I: Copy + PartialEq, O> RxFn<I, O> {
         // gets passed.
         // The unwrap works because the whole thing starts out dirty and after that there's always
         // something in the option.
-        if self.this.dirty.get() || self.last_input.unwrap() != params {
-            self.last_input = Some(params);
+        if self.this.dirty.get() || self.last_input.as_ref().unwrap() != &params {
+            let params: &I = self.last_input.insert(params);
             self.this.dirty.set(false);
             self.this.generation.set(self.this.generation.get() + 1);
 
@@ -137,6 +155,7 @@ pub struct RxCtx<'a> {
     dependent: &'a Rc<Dependent>,
 }
 
+#[derive(Debug)]
 pub struct Dependent {
     generation: Cell<u64>,
     dirty: Cell<bool>,
@@ -222,7 +241,7 @@ mod tests {
 
         let mut f = RxFn::new();
         let mut something = |ctx, a: &mut Rx<bool>, b: &mut Rx<u32>| -> bool {
-            *f.call(ctx, (), |ctx, ()| a.read(ctx) || b.read(ctx) > 3)
+            *f.call(ctx, (), |ctx, ()| *a.read(ctx) || *b.read(ctx) > 3)
         };
 
         let dependent = Dependent::toplevel();
@@ -259,7 +278,7 @@ mod tests {
 
         fn inner_layout(ctx: &RxCtx, state: &mut Inner, width: f64) -> f64 {
             *state.layout.call(ctx, width, |ctx, width| {
-                if state.a.read(ctx) && width > 0. {
+                if *state.a.read(ctx) && *width > 0. {
                     20.
                 } else {
                     30.
