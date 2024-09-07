@@ -174,6 +174,10 @@ impl Dependent {
     pub fn ctx<'a>(self: &'a Rc<Self>) -> RxCtx<'a> {
         RxCtx { dependent: self }
     }
+
+    pub fn dirty(&self) -> bool {
+        self.dirty.get()
+    }
 }
 
 #[cfg(test)]
