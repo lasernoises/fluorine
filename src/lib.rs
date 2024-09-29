@@ -85,6 +85,12 @@ pub struct RxFn<I: PartialEq, O> {
     this: Rc<Dependent>,
 }
 
+impl<I: PartialEq, O> Default for RxFn<I, O> {
+    fn default() -> Self {
+        RxFn::new()
+    }
+}
+
 // TODO: Add a test and comment that explains the reasoning for this.
 impl<I: PartialEq, O> Clone for RxFn<I, O> {
     fn clone(&self) -> Self {
