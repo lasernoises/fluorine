@@ -26,7 +26,7 @@ impl<T: Clone> Rx<T> {
         }
     }
 
-    pub fn read(&self, ctx: &RxCtx) -> &T {
+    pub fn get(&self, ctx: &RxCtx) -> &T {
         let mut dependents = self.dependents.borrow_mut();
 
         let mut push = true;
@@ -49,6 +49,10 @@ impl<T: Clone> Rx<T> {
             dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
         }
 
+        &self.value
+    }
+
+    pub fn get_untracked(&self) -> &T {
         &self.value
     }
 
@@ -199,7 +203,7 @@ mod tests {
 
         fn layout(ctx: &RxCtx, state: &mut MyState, width: f64) -> f64 {
             *state.layout.call(ctx, width, |ctx, width| {
-                let height = state.something.read(ctx) / width;
+                let height = state.something.get(ctx) / width;
 
                 height
             })
@@ -251,7 +255,7 @@ mod tests {
 
         let mut f = RxFn::new();
         let mut something = |ctx, a: &mut Rx<bool>, b: &mut Rx<u32>| -> bool {
-            *f.call(ctx, (), |ctx, ()| *a.read(ctx) || *b.read(ctx) > 3)
+            *f.call(ctx, (), |ctx, ()| *a.get(ctx) || *b.get(ctx) > 3)
         };
 
         let dependent = Dependent::toplevel();
@@ -288,7 +292,7 @@ mod tests {
 
         fn inner_layout(ctx: &RxCtx, state: &mut Inner, width: f64) -> f64 {
             *state.layout.call(ctx, width, |ctx, width| {
-                if *state.a.read(ctx) && *width > 0. {
+                if *state.a.get(ctx) && *width > 0. {
                     20.
                 } else {
                     30.
@@ -305,7 +309,7 @@ mod tests {
 
         fn layout(ctx: &RxCtx, state: &mut MyState, width: f64) -> f64 {
             *state.layout.call(ctx, width, |ctx, width| {
-                let height = state.something.read(ctx) / width
+                let height = state.something.get(ctx) / width
                     + inner_layout(ctx, &mut state.inner, width - 1.);
 
                 height

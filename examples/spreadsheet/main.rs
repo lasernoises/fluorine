@@ -35,13 +35,13 @@ impl Spreasheet {
             // If can't get a lock on the RxFn because we are being evaluated by it due to a cycle
             // we track its Expr as a fallback so that reactivity doesn't get lost. Otherwise if the
             // cell changes in a way that would break the cycle we wouldn't get invalidated.
-            cell.1.read(ctx);
+            cell.1.get(ctx);
 
             return None;
         };
 
         *rx_fn.call(ctx, (), |ctx, _| {
-            eval(cell.1.read(ctx).as_ref()?, &|i| self.eval_cell(ctx, i))
+            eval(cell.1.get(ctx).as_ref()?, &|i| self.eval_cell(ctx, i))
         })
     }
 }
