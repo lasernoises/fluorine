@@ -75,6 +75,7 @@ impl<T> Rx<T> {
 
 #[derive(Debug)]
 pub struct RxVec<T> {
+    id: Id,
     content: Vec<RxVecValue<T>>,
     dependents: RefCell<Vec<(u64, Weak<Dependent>)>>,
 }
@@ -94,6 +95,7 @@ impl<T> RxVecValue<T> {
 impl<T: Clone> Clone for RxVec<T> {
     fn clone(&self) -> Self {
         RxVec {
+            id: Id::new(),
             content: self
                 .content
                 .iter()
@@ -116,9 +118,14 @@ impl<T> Default for RxVec<T> {
 impl<T> RxVec<T> {
     pub fn new() -> Self {
         RxVec {
+            id: Id::new(),
             content: Vec::new(),
             dependents: RefCell::new(Vec::new()),
         }
+    }
+
+    pub fn id(&self) -> IdRef {
+        (&self.id).into()
     }
 
     pub fn push(&mut self, value: T) {
