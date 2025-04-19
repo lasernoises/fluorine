@@ -31,14 +31,14 @@ impl<T: Clone> Rx<T> {
 
         let mut push = true;
 
-        dependents.retain_mut(|(gen, d)| {
+        dependents.retain_mut(|(generation, d)| {
             let Some(dependent) = d.upgrade() else {
                 // filter out dependents that no longer exist
                 return false;
             };
 
             if Rc::ptr_eq(&dependent, ctx.dependent) {
-                *gen = ctx.dependent.generation.get();
+                *generation = ctx.dependent.generation.get();
                 push = false;
             }
 
@@ -58,13 +58,13 @@ impl<T: Clone> Rx<T> {
 
     pub fn get_mut(&mut self) -> &mut T {
         fn mark_dirty(dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
-            dependents.borrow_mut().retain(|(gen, d)| {
+            dependents.borrow_mut().retain(|(generation, d)| {
                 let Some(dependent) = d.upgrade() else {
                     return false;
                 };
 
                 // filter out things that are no longer dependent
-                if dependent.generation.get() > *gen {
+                if dependent.generation.get() > *generation {
                     return false;
                 }
 
@@ -120,14 +120,14 @@ impl<I: PartialEq, O> RxFn<I, O> {
 
         let mut push = true;
 
-        dependents.retain_mut(|(gen, d)| {
+        dependents.retain_mut(|(generation, d)| {
             let Some(dependent) = d.upgrade() else {
                 // filter out dependents that no longer exist
                 return false;
             };
 
             if Rc::ptr_eq(&dependent, ctx.dependent) {
-                *gen = ctx.dependent.generation.get();
+                *generation = ctx.dependent.generation.get();
                 push = false;
             }
 
@@ -182,14 +182,14 @@ impl Effect {
 
         let mut push = true;
 
-        dependents.retain_mut(|(gen, d)| {
+        dependents.retain_mut(|(generation, d)| {
             let Some(dependent) = d.upgrade() else {
                 // filter out dependents that no longer exist
                 return false;
             };
 
             if Rc::ptr_eq(&dependent, ctx.dependent) {
-                *gen = ctx.dependent.generation.get();
+                *generation = ctx.dependent.generation.get();
                 push = false;
             }
 

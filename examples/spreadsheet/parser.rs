@@ -315,7 +315,7 @@ fn parse_primary(it: &mut Parser) -> Result<Expr, ()> {
     let tc = it.advance();
     match &tc {
         &Token::Number(n) => Ok(Expr::Number(*n)),
-        &Token::Identifier(ref s) => Ok(Expr::Variable(s.clone())),
+        &Token::Identifier(s) => Ok(Expr::Variable(s.clone())),
         _ => {
             it.error();
             Err(())
@@ -383,16 +383,6 @@ impl<'a> Parser<'a> {
         } else {
             self.error();
             Err(())
-        }
-    }
-
-    fn optionally(&mut self, expected: TokenKind) -> Result<bool, ()> {
-        let token = self.peek();
-        if TokenKind::from(token) == expected {
-            self.expect(expected)?;
-            Ok(true)
-        } else {
-            Ok(false)
         }
     }
 }
