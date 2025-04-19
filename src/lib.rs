@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    ops::{Index, IndexMut},
     rc::{Rc, Weak},
 };
 
@@ -18,7 +19,7 @@ impl<T: Clone> Clone for Rx<T> {
     }
 }
 
-impl<T: Clone> Rx<T> {
+impl<T> Rx<T> {
     pub fn new(value: T) -> Self {
         Rx {
             value,
@@ -57,28 +58,25 @@ impl<T: Clone> Rx<T> {
     }
 
     pub fn get_mut(&mut self) -> &mut T {
-        fn mark_dirty(dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
-            dependents.borrow_mut().retain(|(generation, d)| {
-                let Some(dependent) = d.upgrade() else {
-                    return false;
-                };
-
-                // filter out things that are no longer dependent
-                if dependent.generation.get() > *generation {
-                    return false;
-                }
-
-                dependent.dirty.set(true);
-
-                mark_dirty(&dependent.dependents);
-
-                true
-            });
-        }
-
         mark_dirty(&self.dependents);
 
         &mut self.value
+    }
+}
+
+// This read doesn't track. This is necessary for fine-grained reactivity.
+impl<T> Index<usize> for Rx<Vec<T>> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.value[index]
+    }
+}
+
+// This doesn't mark dependents as dirty. This is necessary for fine-grained reactivity.
+impl<T> IndexMut<usize> for Rx<Vec<T>> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.value[index]
     }
 }
 
@@ -247,6 +245,25 @@ impl Dependent {
     pub fn set_clean(&self) {
         self.dirty.set(false);
     }
+}
+
+fn mark_dirty(dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
+    dependents.borrow_mut().retain(|(generation, d)| {
+        let Some(dependent) = d.upgrade() else {
+            return false;
+        };
+
+        // filter out things that are no longer dependent
+        if dependent.generation.get() > *generation {
+            return false;
+        }
+
+        dependent.dirty.set(true);
+
+        mark_dirty(&dependent.dependents);
+
+        true
+    });
 }
 
 #[cfg(test)]
