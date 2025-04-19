@@ -1,8 +1,37 @@
 use std::{
     cell::{Cell, RefCell},
-    ops::{Index, IndexMut},
+    marker::PhantomData,
     rc::{Rc, Weak},
 };
+
+// https://cliffle.com/blog/not-thread-safe/
+#[derive(Debug)]
+pub struct Id(u64, PhantomData<*const u8>);
+
+#[derive(Copy, Clone, Debug)]
+pub struct IdRef(u64, PhantomData<*const u8>);
+
+impl Id {
+    fn new() -> Self {
+        thread_local! {
+            static NEXT_ID: Cell<u64> = Cell::new(0);
+        }
+
+        Id(NEXT_ID.replace(NEXT_ID.get() + 1), PhantomData)
+    }
+}
+
+impl From<&Id> for IdRef {
+    fn from(value: &Id) -> Self {
+        IdRef(value.0, PhantomData)
+    }
+}
+
+impl PartialEq<Id> for IdRef {
+    fn eq(&self, other: &Id) -> bool {
+        self.0 == other.0
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Rx<T> {
@@ -28,27 +57,7 @@ impl<T> Rx<T> {
     }
 
     pub fn get(&self, ctx: &mut RxCtx) -> &T {
-        let mut dependents = self.dependents.borrow_mut();
-
-        let mut push = true;
-
-        dependents.retain_mut(|(generation, d)| {
-            let Some(dependent) = d.upgrade() else {
-                // filter out dependents that no longer exist
-                return false;
-            };
-
-            if Rc::ptr_eq(&dependent, ctx.dependent) {
-                *generation = ctx.dependent.generation.get();
-                push = false;
-            }
-
-            true
-        });
-
-        if push {
-            dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
-        }
+        track(ctx, &self.dependents);
 
         &self.value
     }
@@ -64,19 +73,81 @@ impl<T> Rx<T> {
     }
 }
 
-// This read doesn't track. This is necessary for fine-grained reactivity.
-impl<T> Index<usize> for Rx<Vec<T>> {
-    type Output = T;
+#[derive(Debug)]
+pub struct RxVec<T> {
+    id: Id,
+    content: Vec<RxVecValue<T>>,
+    next_id: u64,
+    dependents: RefCell<Vec<(u64, Weak<Dependent>)>>,
+}
 
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.value[index]
+#[derive(Debug)]
+pub struct RxVecValue<T> {
+    pub id: Id,
+    pub value: T,
+}
+
+impl<T: Clone> Clone for RxVec<T> {
+    fn clone(&self) -> Self {
+        RxVec {
+            id: Id::new(),
+            content: self
+                .content
+                .iter()
+                .map(|v| RxVecValue {
+                    id: Id::new(),
+                    value: v.value.clone(),
+                })
+                .collect(),
+            next_id: self.next_id,
+            dependents: RefCell::new(Vec::new()),
+        }
     }
 }
 
-// This doesn't mark dependents as dirty. This is necessary for fine-grained reactivity.
-impl<T> IndexMut<usize> for Rx<Vec<T>> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.value[index]
+impl<T> Default for RxVec<T> {
+    fn default() -> Self {
+        RxVec::new()
+    }
+}
+
+impl<T> RxVec<T> {
+    pub fn new() -> Self {
+        RxVec {
+            id: Id::new(),
+            content: Vec::new(),
+            next_id: 0,
+            dependents: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn id(&self) -> IdRef {
+        (&self.id).into()
+    }
+
+    pub fn push(&mut self, value: T) {
+        mark_dirty(&self.dependents);
+
+        self.content.push(RxVecValue {
+            id: Id::new(),
+            value,
+        });
+    }
+
+    pub fn as_slice(&self, ctx: &mut RxCtx) -> &[RxVecValue<T>] {
+        track(ctx, &self.dependents);
+
+        &self.content
+    }
+
+    pub fn get(&self, ctx: &mut RxCtx, index: usize) -> Option<&T> {
+        track(ctx, &self.dependents);
+
+        self.content.get(index).map(|v| &v.value)
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.content.get_mut(index).map(|v| &mut v.value)
     }
 }
 
@@ -119,27 +190,7 @@ impl<I: PartialEq, O> RxFn<I, O> {
         params: I,
         mut closure: impl FnMut(&mut RxCtx, &I) -> O,
     ) -> &O {
-        let mut dependents = self.this.dependents.borrow_mut();
-
-        let mut push = true;
-
-        dependents.retain_mut(|(generation, d)| {
-            let Some(dependent) = d.upgrade() else {
-                // filter out dependents that no longer exist
-                return false;
-            };
-
-            if Rc::ptr_eq(&dependent, ctx.dependent) {
-                *generation = ctx.dependent.generation.get();
-                push = false;
-            }
-
-            true
-        });
-
-        if push {
-            dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
-        }
+        track(ctx, &self.this.dependents);
 
         // Maybe != is not quite right here because we don't want trigger a re-run every time a NaN
         // gets passed.
@@ -181,27 +232,7 @@ impl Effect {
     }
 
     pub fn call(&mut self, ctx: &mut RxCtx, mut closure: impl FnMut(&mut RxCtx)) {
-        let mut dependents = self.this.dependents.borrow_mut();
-
-        let mut push = true;
-
-        dependents.retain_mut(|(generation, d)| {
-            let Some(dependent) = d.upgrade() else {
-                // filter out dependents that no longer exist
-                return false;
-            };
-
-            if Rc::ptr_eq(&dependent, ctx.dependent) {
-                *generation = ctx.dependent.generation.get();
-                push = false;
-            }
-
-            true
-        });
-
-        if push {
-            dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
-        }
+        track(ctx, &self.this.dependents);
 
         if self.this.dirty.get() {
             self.this.dirty.set(false);
@@ -264,6 +295,30 @@ fn mark_dirty(dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
 
         true
     });
+}
+
+fn track(ctx: &mut RxCtx, dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
+    let mut dependents = dependents.borrow_mut();
+
+    let mut push = true;
+
+    dependents.retain_mut(|(generation, d)| {
+        let Some(dependent) = d.upgrade() else {
+            // filter out dependents that no longer exist
+            return false;
+        };
+
+        if Rc::ptr_eq(&dependent, ctx.dependent) {
+            *generation = ctx.dependent.generation.get();
+            push = false;
+        }
+
+        true
+    });
+
+    if push {
+        dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
+    }
 }
 
 #[cfg(test)]
