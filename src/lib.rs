@@ -161,6 +161,56 @@ impl<I: PartialEq, O> RxFn<I, O> {
     }
 }
 
+#[derive(Debug)]
+pub struct Effect {
+    this: Rc<Dependent>,
+}
+
+impl Effect {
+    pub fn new() -> Self {
+        Effect {
+            this: Rc::new(Dependent {
+                generation: Cell::new(0),
+                dirty: Cell::new(true),
+                dependents: RefCell::new(Vec::new()),
+            }),
+        }
+    }
+
+    pub fn call(&mut self, ctx: &RxCtx, mut closure: impl FnMut(&RxCtx)) {
+        let mut dependents = self.this.dependents.borrow_mut();
+
+        let mut push = true;
+
+        dependents.retain_mut(|(gen, d)| {
+            let Some(dependent) = d.upgrade() else {
+                // filter out dependents that no longer exist
+                return false;
+            };
+
+            if Rc::ptr_eq(&dependent, ctx.dependent) {
+                *gen = ctx.dependent.generation.get();
+                push = false;
+            }
+
+            true
+        });
+
+        if push {
+            dependents.push((ctx.dependent.generation.get(), Rc::downgrade(ctx.dependent)));
+        }
+
+        if self.this.dirty.get() {
+            self.this.dirty.set(false);
+            self.this.generation.set(self.this.generation.get() + 1);
+
+            closure(&RxCtx {
+                dependent: &self.this,
+            });
+        }
+    }
+}
+
 pub struct RxCtx<'a> {
     dependent: &'a Rc<Dependent>,
 }
