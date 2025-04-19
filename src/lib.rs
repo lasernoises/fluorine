@@ -3,7 +3,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Rx<T> {
     value: T,
     dependents: RefCell<Vec<(u64, Weak<Dependent>)>>,
