@@ -26,7 +26,7 @@ impl<T: Clone> Rx<T> {
         }
     }
 
-    pub fn get(&self, ctx: &RxCtx) -> &T {
+    pub fn get(&self, ctx: &mut RxCtx) -> &T {
         let mut dependents = self.dependents.borrow_mut();
 
         let mut push = true;
@@ -115,7 +115,12 @@ impl<I: PartialEq, O> RxFn<I, O> {
         }
     }
 
-    pub fn call(&mut self, ctx: &RxCtx, params: I, mut closure: impl FnMut(&RxCtx, &I) -> O) -> &O {
+    pub fn call(
+        &mut self,
+        ctx: &mut RxCtx,
+        params: I,
+        mut closure: impl FnMut(&mut RxCtx, &I) -> O,
+    ) -> &O {
         let mut dependents = self.this.dependents.borrow_mut();
 
         let mut push = true;
@@ -148,7 +153,7 @@ impl<I: PartialEq, O> RxFn<I, O> {
             self.this.generation.set(self.this.generation.get() + 1);
 
             let result = self.result.insert(closure(
-                &RxCtx {
+                &mut RxCtx {
                     dependent: &self.this,
                 },
                 params,
@@ -177,7 +182,7 @@ impl Effect {
         }
     }
 
-    pub fn call(&mut self, ctx: &RxCtx, mut closure: impl FnMut(&RxCtx)) {
+    pub fn call(&mut self, ctx: &mut RxCtx, mut closure: impl FnMut(&mut RxCtx)) {
         let mut dependents = self.this.dependents.borrow_mut();
 
         let mut push = true;
@@ -204,7 +209,7 @@ impl Effect {
             self.this.dirty.set(false);
             self.this.generation.set(self.this.generation.get() + 1);
 
-            closure(&RxCtx {
+            closure(&mut RxCtx {
                 dependent: &self.this,
             });
         }
@@ -255,7 +260,7 @@ mod tests {
             layout: RxFn<f64, f64>,
         }
 
-        fn layout(ctx: &RxCtx, state: &mut MyState, width: f64) -> f64 {
+        fn layout(ctx: &mut RxCtx, state: &mut MyState, width: f64) -> f64 {
             *state.layout.call(ctx, width, |ctx, width| {
                 let height = state.something.get(ctx) / width;
 
@@ -269,7 +274,7 @@ mod tests {
         };
 
         let dependent = Dependent::toplevel();
-        let ctx = &dependent.ctx();
+        let ctx = &mut dependent.ctx();
 
         assert_eq!(layout(ctx, &mut state, 2.), 64.);
 
@@ -284,7 +289,7 @@ mod tests {
         let times_called = Cell::new(0);
 
         let mut f = RxFn::new();
-        let mut something = |ctx, num: u32| -> bool {
+        let mut something = |ctx: &mut RxCtx, num: u32| -> bool {
             *f.call(ctx, num, |_ctx, num| {
                 times_called.set(times_called.get() + 1);
                 num & 1 == 0
@@ -292,7 +297,7 @@ mod tests {
         };
 
         let dependent = Dependent::toplevel();
-        let ctx = &dependent.ctx();
+        let ctx = &mut dependent.ctx();
 
         assert!(!something(ctx, 1));
         assert_eq!(times_called.get(), 1);
@@ -308,12 +313,12 @@ mod tests {
         let mut b = Rx::new(2);
 
         let mut f = RxFn::new();
-        let mut something = |ctx, a: &mut Rx<bool>, b: &mut Rx<u32>| -> bool {
+        let mut something = |ctx: &mut RxCtx, a: &mut Rx<bool>, b: &mut Rx<u32>| -> bool {
             *f.call(ctx, (), |ctx, ()| *a.get(ctx) || *b.get(ctx) > 3)
         };
 
         let dependent = Dependent::toplevel();
-        let ctx = &dependent.ctx();
+        let ctx = &mut dependent.ctx();
 
         assert!(something(ctx, &mut a, &mut b));
         assert_eq!(a.dependents.borrow().len(), 1);
@@ -344,7 +349,7 @@ mod tests {
             layout: RxFn<f64, f64>,
         }
 
-        fn inner_layout(ctx: &RxCtx, state: &mut Inner, width: f64) -> f64 {
+        fn inner_layout(ctx: &mut RxCtx, state: &mut Inner, width: f64) -> f64 {
             *state.layout.call(ctx, width, |ctx, width| {
                 if *state.a.get(ctx) && *width > 0. {
                     20.
@@ -361,7 +366,7 @@ mod tests {
             layout: RxFn<f64, f64>,
         }
 
-        fn layout(ctx: &RxCtx, state: &mut MyState, width: f64) -> f64 {
+        fn layout(ctx: &mut RxCtx, state: &mut MyState, width: f64) -> f64 {
             *state.layout.call(ctx, width, |ctx, width| {
                 let height = state.something.get(ctx) / width
                     + inner_layout(ctx, &mut state.inner, width - 1.);
@@ -380,7 +385,7 @@ mod tests {
         };
 
         let dependent = Dependent::toplevel();
-        let ctx = &dependent.ctx();
+        let ctx = &mut dependent.ctx();
 
         assert_eq!(layout(ctx, &mut state, 2.), 84.);
 

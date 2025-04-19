@@ -5,7 +5,7 @@ use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 use eframe::egui;
 use fluorine::*;
-use parser::{parse, tokenize_with_context, Expr, Parser};
+use parser::{Expr, Parser, parse, tokenize_with_context};
 
 mod parser;
 
@@ -28,7 +28,7 @@ struct Spreasheet {
 }
 
 impl Spreasheet {
-    fn eval_cell(&self, ctx: &RxCtx, i: usize) -> Option<f64> {
+    fn eval_cell(&self, ctx: &mut RxCtx, i: usize) -> Option<f64> {
         let cell = &self.cells.get(i)?;
 
         let Ok(mut rx_fn) = cell.2.try_borrow_mut() else {
@@ -41,7 +41,7 @@ impl Spreasheet {
         };
 
         *rx_fn.call(ctx, (), |ctx, _| {
-            eval(cell.1.get(ctx).as_ref()?, &|i| self.eval_cell(ctx, i))
+            eval(cell.1.get(ctx).as_ref()?, &mut |i| self.eval_cell(ctx, i))
         })
     }
 }
@@ -84,7 +84,7 @@ impl eframe::App for Spreasheet {
 
                             ui.label("=");
                             ui.label(
-                                self.eval_cell(&self.dependent.ctx(), i)
+                                self.eval_cell(&mut self.dependent.ctx(), i)
                                     .map(|r| r.to_string())
                                     .as_deref()
                                     .unwrap_or("error"),
@@ -97,7 +97,7 @@ impl eframe::App for Spreasheet {
     }
 }
 
-fn eval(expr: &Expr, eval_other: &impl Fn(usize) -> Option<f64>) -> Option<f64> {
+fn eval(expr: &Expr, eval_other: &mut impl FnMut(usize) -> Option<f64>) -> Option<f64> {
     match expr {
         Expr::Binary(left, operator, right) => {
             let left = eval(left, eval_other)?;
