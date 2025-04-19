@@ -83,8 +83,14 @@ pub struct RxVec<T> {
 
 #[derive(Debug)]
 pub struct RxVecValue<T> {
-    pub id: Id,
+    id: Id,
     pub value: T,
+}
+
+impl<T> RxVecValue<T> {
+    pub fn id(&self) -> IdRef {
+        (&self.id).into()
+    }
 }
 
 impl<T: Clone> Clone for RxVec<T> {
