@@ -238,6 +238,10 @@ impl Dependent {
     pub fn dirty(&self) -> bool {
         self.dirty.get()
     }
+
+    pub fn set_clean(&self) {
+        self.dirty.set(false);
+    }
 }
 
 #[cfg(test)]
