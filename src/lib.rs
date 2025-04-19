@@ -281,6 +281,7 @@ impl Dependent {
     }
 }
 
+/// Recursively mark all dependents and dependents of dependens as dirty.
 fn mark_dirty(dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
     dependents.borrow_mut().retain(|(generation, d)| {
         let Some(dependent) = d.upgrade() else {
@@ -300,6 +301,7 @@ fn mark_dirty(dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
     });
 }
 
+/// Adds the `dependent` of the `ctx` to `dependents`.
 fn track(ctx: &mut RxCtx, dependents: &RefCell<Vec<(u64, Weak<Dependent>)>>) {
     let mut dependents = dependents.borrow_mut();
 
