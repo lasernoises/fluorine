@@ -62,7 +62,7 @@ struct Scanner<'a> {
 }
 
 impl<'a> Scanner<'a> {
-    fn new(buf: &str) -> Scanner {
+    fn new(buf: &str) -> Scanner<'_> {
         Scanner {
             current_position: 0,
             it: buf.chars().peekable(),
@@ -143,7 +143,7 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    fn new(buf: &str) -> Lexer {
+    fn new(buf: &str) -> Lexer<'_> {
         Lexer {
             it: Scanner::new(buf),
         }
