@@ -8,7 +8,7 @@ use std::{
 #[derive(Debug)]
 pub struct Id(u64, PhantomData<*const u8>);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct IdRef(u64, PhantomData<*const u8>);
 
 impl Id {
