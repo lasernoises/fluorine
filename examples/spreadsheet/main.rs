@@ -16,18 +16,18 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Fluorine Spreadsheet",
         options,
-        Box::new(|_| Box::<Spreasheet>::default()),
+        Box::new(|_| Ok(Box::new(Spreadsheet::default()))),
     )
 }
 
 type Cells = [(Rc<str>, Rx<Option<Expr>>, RefCell<RxFn<(), Option<f64>>>); 4];
 
-struct Spreasheet {
+struct Spreadsheet {
     dependent: Rc<Dependent>,
     cells: Cells,
 }
 
-impl Spreasheet {
+impl Spreadsheet {
     fn eval_cell(&self, ctx: &mut RxCtx, i: usize) -> Option<f64> {
         let cell = &self.cells.get(i)?;
 
@@ -46,7 +46,7 @@ impl Spreasheet {
     }
 }
 
-impl Default for Spreasheet {
+impl Default for Spreadsheet {
     fn default() -> Self {
         Self {
             dependent: Dependent::toplevel(),
@@ -57,7 +57,7 @@ impl Default for Spreasheet {
     }
 }
 
-impl eframe::App for Spreasheet {
+impl eframe::App for Spreadsheet {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {

@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dev-dependencies]
-eframe = "0.27.2" # needed for the spreadsheet example
+eframe = "0.33.2" # needed for the spreadsheet example
